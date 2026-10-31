@@ -1,4 +1,4 @@
-import * as cheerio from "cheerio";
+﻿import * as cheerio from "cheerio";
 import type { DiscoveredBusiness, DiscoveryQuery, SourceStatus } from "./types";
 
 const USER_AGENT = "MBCoreXLeads/1.0 (+https://mbcorex.vercel.app)";
@@ -6,6 +6,15 @@ const timeout = (ms = 9000) => AbortSignal.timeout(ms);
 const clean = (value: string, limit = 120) => value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
 const sourceQuery = (query: DiscoveryQuery) => clean([query.category, query.keywords, query.city].filter(Boolean).join(" "), 200);
 const failed = (source: string, error: unknown): SourceStatus => ({ source, status: "unavailable", count: 0, message: error instanceof Error ? error.message : "Source request failed" });
+const nextPage = ($: cheerio.CheerioAPI, current: URL) => {
+  const href = $("a").filter((_, anchor) => {
+    const link = $(anchor);
+    return clean(link.text()).toLowerCase() === "next" || link.attr("aria-label")?.toLowerCase().includes("next") === true;
+  }).first().attr("href");
+  if (!href) return null;
+  const candidate = new URL(href, current);
+  return candidate.origin === current.origin ? candidate : null;
+};
 
 async function fetchHtml(url: URL) {
   const response = await fetch(url, {
@@ -23,22 +32,31 @@ async function collectIndex(query: DiscoveryQuery): Promise<{ status: SourceStat
   if (search) url.searchParams.set("q", search);
   if (query.state) url.searchParams.set("state", query.state.toLowerCase());
   try {
-    const html = await fetchHtml(url);
-    const $ = cheerio.load(html);
     const businesses: DiscoveredBusiness[] = [];
-    $('a[href^="/b/"]').each((_, anchor) => {
-      if (businesses.length >= 20) return false;
-      const link = $(anchor);
-      const card = link.closest("article").length ? link.closest("article") : link.parent().parent();
-      const name = clean(card.find("h2,h3").first().text() || link.text());
-      if (!name) return;
-      const detail = clean(card.text(), 500);
-      const locationMatch = detail.match(/\s·\s([^·]+)$/);
-      businesses.push({ name, category: "", city: "", state: query.state, phone: "", email: "", website: "", source: "Index.ng", sourceUrl: new URL(link.attr("href")!, "https://index.ng").toString() });
-      const last = businesses[businesses.length - 1];
-      if (locationMatch) last.city = clean(locationMatch[1]);
-    });
-    return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: "Public directory search completed." }, businesses };
+    const seen = new Set<string>();
+    let page: URL | null = url;
+    for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
+      if (pageNumber) await new Promise(resolve => setTimeout(resolve, 500));
+      const current: URL = page;
+      const $ = cheerio.load(await fetchHtml(current));
+      $('a[href^="/b/"]').each((_, anchor) => {
+        if (businesses.length >= 100) return false;
+        const link = $(anchor);
+        const sourceUrl = new URL(link.attr("href")!, "https://index.ng").toString();
+        if (seen.has(sourceUrl)) return;
+        const card = link.closest("article").length ? link.closest("article") : link.parent().parent();
+        const name = clean((link.text() || card.find("h2,h3").first().text()).replace(/^\d{1,3}\s*/, ""));
+        if (!name) return;
+        const detail = clean(card.text(), 800).replace(/\b(?:Open now|Open 24 hours|View|Claim this listing|Report this listing)\b/gi, " ");
+        const [identity = "", rawLocation = ""] = detail.split(/[·•]/, 2);
+        const category = clean(identity.replace(name, "").replace(/^\d{1,3}\s*/, ""));
+        const [city = "", state = query.state] = clean(rawLocation).split(",").map(clean);
+        seen.add(sourceUrl);
+        businesses.push({ name, category, city, state, phone: "", email: "", website: "", source: "Index.ng", sourceUrl });
+      });
+      page = businesses.length < 100 ? nextPage($, current) : null;
+    }
+    return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: "Up to five result pages checked (100 listings maximum)." }, businesses };
   } catch (error) {
     return { status: failed("Index.ng", error), businesses: [] };
   }
@@ -50,34 +68,34 @@ async function collectNaijaBased(query: DiscoveryQuery): Promise<{ status: Sourc
   if (search) url.searchParams.set("search", search);
   if (query.state) url.searchParams.set("state", query.state);
   try {
-    const html = await fetchHtml(url);
-    const $ = cheerio.load(html);
     const businesses: DiscoveredBusiness[] = [];
-    $("#businesses-list .item-card").each((_, element) => {
-      if (businesses.length >= 20) return false;
-      const card = $(element);
-      const name = clean(card.find(".item-title").first().text());
-      if (!name) return;
-      const category = clean(card.find(".seller-info p").first().text());
-      const location = clean(card.find(".item-location").first().text());
-      const [city = "", state = ""] = location.split(",").map(clean);
-      const click = card.attr("onclick") || "";
-      const path = click.match(/(?:window\.location\.href\s*=\s*|location\.href\s*=\s*)['"]([^'"]+)['"]/i)?.[1];
-      const phoneAction = card.find('button[onclick*="revealContact"]').first().attr("onclick") || "";
-      const phone = phoneAction.match(/revealContact\(\s*['"]phone['"]\s*,\s*\d+\s*,\s*['"]([^'"]+)['"]\s*\)/i)?.[1] || "";
-      businesses.push({
-        name,
-        category,
-        city,
-        state,
-        phone: clean(phone, 30),
-        email: "",
-        website: "",
-        source: "NaijaBased",
-        sourceUrl: path ? new URL(path, "https://www.naijabased.fun").toString() : url.toString(),
+    const seen = new Set<string>();
+    let page: URL | null = url;
+    for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
+      if (pageNumber) await new Promise(resolve => setTimeout(resolve, 500));
+      const current: URL = page;
+      const $ = cheerio.load(await fetchHtml(current));
+      $("#businesses-list .item-card").each((_, element) => {
+        if (businesses.length >= 100) return false;
+        const card = $(element);
+        const name = clean(card.find(".item-title").first().text());
+        if (!name) return;
+        const category = clean(card.find(".seller-info p").first().text());
+        const location = clean(card.find(".item-location").first().text());
+        const [city = "", state = ""] = location.split(",").map(clean);
+        const click = card.attr("onclick") || "";
+        const path = click.match(/(?:window\.location\.href\s*=\s*|location\.href\s*=\s*)['"]([^'"]+)['"]/i)?.[1];
+        const sourceUrl = path ? new URL(path, "https://www.naijabased.fun").toString() : current.toString();
+        const key = `${sourceUrl}|${name.toLowerCase()}|${city.toLowerCase()}`;
+        if (seen.has(key)) return;
+        const phoneAction = card.find('button[onclick*="revealContact"]').first().attr("onclick") || "";
+        const phone = phoneAction.match(/revealContact\(\s*['"]phone['"]\s*,\s*\d+\s*,\s*['"]([^'"]+)['"]\s*\)/i)?.[1] || "";
+        seen.add(key);
+        businesses.push({ name, category, city, state, phone: clean(phone, 30), email: "", website: "", source: "NaijaBased", sourceUrl });
       });
-    });
-    return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: "Public business directory search completed." }, businesses };
+      page = businesses.length < 100 ? nextPage($, current) : null;
+    }
+    return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: "Up to five result pages checked (100 listings maximum)." }, businesses };
   } catch (error) {
     return { status: failed("NaijaBased", error), businesses: [] };
   }
