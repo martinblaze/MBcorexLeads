@@ -91,7 +91,7 @@ async function collectIndex(query: DiscoveryQuery, cursor?: string | null): Prom
   }
 }
 
-async function collectNaijaBased(query: DiscoveryQuery, cursor?: string | null): Promise<{ status: SourceStatus; businesses: DiscoveredBusiness[] }> {
+async function collectNaijaBased(query: DiscoveryQuery, cursor?: string | null, maxPages = 5): Promise<{ status: SourceStatus; businesses: DiscoveredBusiness[] }> {
   const url = safeCursor(cursor, "https://api.naijabased.fun", "/places.php") || new URL("https://api.naijabased.fun/places.php");
   const search = sourceQuery(query);
   if (!cursor) {
@@ -102,7 +102,7 @@ async function collectNaijaBased(query: DiscoveryQuery, cursor?: string | null):
   let page: URL | null = url;
   try {
     const seen = new Set<string>();
-    for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
+    for (let pageNumber = 0; page && pageNumber < maxPages; pageNumber++) {
       if (pageNumber) await new Promise(resolve => setTimeout(resolve, 500));
       const current: URL = page;
       const $ = cheerio.load(await fetchHtml(current));
@@ -187,7 +187,7 @@ export async function searchAllSources(query: DiscoveryQuery) {
 
 export async function findPublicBusinessPhone(name: string, city: string, state: string) {
   const normalized = (value: string) => clean(value, 200).toLowerCase().replace(/[^a-z0-9]/g, "");
-  const result = await collectNaijaBased({ category: "", keywords: name, city: "", state });
+  const result = await collectNaijaBased({ category: "", keywords: name, city: "", state }, undefined, 1);
   if (result.status.status === "unavailable") throw new Error(result.status.message);
   const target = normalized(name);
   const match = result.businesses
