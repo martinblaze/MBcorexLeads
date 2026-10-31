@@ -36,17 +36,31 @@ export default function Home(){
     const response=await fetch("/api/discover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(requestBody)});
     const payload=await response.json() as {error?:string;sources:SourceStatus[];businesses:DiscoveredBusiness[];cursors:NonNullable<DiscoveryQuery["cursors"]>};
     if(!response.ok)throw new Error(payload.error||"Directory search failed");
-    const next=[...leads];let saved=0;let duplicateCount=0;const resultIds:string[]=[];
+    const next=[...leads];const idsBeforeSearch=new Set(leads.map(lead=>lead.id));let saved=0;let duplicateCount=0;let phonesAdded=0;let changed=false;const resultIds:string[]=[];
     for(const found of payload.businesses){
      const candidate={...mk(found.name,found.category,found.city,found.state,found.phone,found.source),email:found.email,website:found.website,sourceUrl:found.sourceUrl};
-     if(isDuplicate(candidate,next)){duplicateCount++;continue}
+     const duplicate=next.find(existing=>isDuplicate(candidate,[existing]));
+     if(duplicate){
+      duplicateCount++;
+      const index=next.findIndex(existing=>existing.id===duplicate.id);
+      const merged={...duplicate};
+      if(!merged.phone&&candidate.phone){merged.phone=candidate.phone;phonesAdded++;changed=true}
+      if(!merged.category&&candidate.category){merged.category=candidate.category;changed=true}
+      if(!merged.city&&candidate.city){merged.city=candidate.city;changed=true}
+      if(!merged.state&&candidate.state){merged.state=candidate.state;changed=true}
+      if(!merged.email&&candidate.email){merged.email=candidate.email;changed=true}
+      if(!merged.website&&candidate.website){merged.website=candidate.website;changed=true}
+      next[index]=merged;
+      if(!idsBeforeSearch.has(duplicate.id))resultIds.push(duplicate.id);
+      continue;
+     }
      next.unshift(candidate);saved++;resultIds.push(candidate.id);
     }
-    if(saved)setLeads(next);
+    if(saved||changed)setLeads(next);
     setDirectoryResultIds(ids=>[...new Set([...ids,...resultIds])]);
     setSourceStatuses(previous=>continuation?payload.sources.map(source=>({...source,count:source.count+(previous.find(old=>old.source===source.source)?.count||0)})):payload.sources);
     setSearchCursors(payload.cursors);
-    notify(`${saved} new businesses saved${duplicateCount?`; ${duplicateCount} duplicates skipped`:""}`);
+    notify(`${saved} new businesses saved${phonesAdded?`; ${phonesAdded} phone numbers added`:""}${duplicateCount?`; ${duplicateCount} duplicates checked`:""}`);
    }catch(error){notify(error instanceof Error?error.message:"Directory search failed")}
    finally{setDiscovering(false)}
   };
