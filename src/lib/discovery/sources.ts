@@ -184,3 +184,21 @@ export async function searchAllSources(query: DiscoveryQuery) {
     },
   };
 }
+
+export async function findPublicBusinessPhone(name: string, city: string, state: string) {
+  const normalized = (value: string) => clean(value, 200).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const result = await collectNaijaBased({ category: "", keywords: name, city: "", state });
+  if (result.status.status === "unavailable") throw new Error(result.status.message);
+  const target = normalized(name);
+  const match = result.businesses
+    .filter(business => business.phone)
+    .map(business => {
+      const candidate = normalized(business.name);
+      const nameMatches = candidate === target || (Math.min(candidate.length, target.length) >= 10 && (candidate.includes(target) || target.includes(candidate)));
+      const cityMatches = !city || !business.city || normalized(city) === normalized(business.city);
+      const stateMatches = !state || !business.state || normalized(state) === normalized(business.state);
+      return { business, matches: nameMatches && cityMatches && stateMatches };
+    })
+    .find(entry => entry.matches)?.business;
+  return match ? { phone: match.phone, source: match.source, sourceUrl: match.sourceUrl } : null;
+}
