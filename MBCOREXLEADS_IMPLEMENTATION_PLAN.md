@@ -23,7 +23,7 @@ This plan reflects the empty-workspace inspection and tracks implemented and rem
 **Backend:** validate imported fields; attach source URL; keep collection modular; no Google Maps scraping.
 **Acceptance:** manual records and CSV can be added, searched, filtered, exported; duplicate phone and name/city matches are skipped; empty/error states are honest.
 **Testing:** phone normalization, duplicates, CSV parsing/import validation; source failure state.
-**Checklist:** [x] manual discovery form [x] public directory links [x] CSV import/export [x] duplicate checks [ ] interactive column mapping [ ] verified collector [x] Supabase business persistence.
+**Checklist:** [x] saved-record search by category/location/keywords [x] source selection removed per user request [x] CSV import/export [x] duplicate checks [ ] interactive column mapping [ ] verified collector [x] Supabase business persistence.
 **Credentials/config:** none for manual workflow; source-specific approved API credentials only if sources provide them.
 
 ## Phase 3 — Message Generation and Outreach Queue

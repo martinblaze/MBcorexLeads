@@ -15,7 +15,8 @@ Open http://localhost:3000. The current UI saves records in this browser's local
 
 - Business records with status, source, contact data, notes and follow-up date.
 - Search, filtering, duplicate checks and CSV import/export, JSON/XML export.
-- Discovery links for Index.ng, NaijaBased and Novovibe; unverified automated collection is not enabled.
+- Search saved business records by category, keyword, state and city; import verified records by CSV. External collectors and source-selection UI are intentionally not active.
+- Settings save the company profile and default country calling code in browser storage. Phone entry shows the calling code separately and strips spaces/non-digits.
 - Approved message preview/copy and manual WhatsApp click-to-chat queue.
 - Manual CRM status and follow-up tracking; analytics from saved records.
 
@@ -40,6 +41,6 @@ Import that repository from the Vercel dashboard, select the `main` branch, and 
 
 ## Sources and limitations
 
-Sources: https://index.ng/, https://www.naijabased.fun/, https://novovibe.com/en/nigeria. Verify each source's current terms and robots/rate limits before building a collector. Manual import is available. WhatsApp only opens an official `wa.me` click-to-chat link; sending and replies remain manual.
+The requested source list remains in the project brief, but source cards and source selection are hidden in the UI. No external collector is active. WhatsApp only opens an official `wa.me` click-to-chat link; sending and replies remain manual.
 
 See [MBCOREXLEADS_PROJECT.md](./MBCOREXLEADS_PROJECT.md) and [MBCOREXLEADS_IMPLEMENTATION_PLAN.md](./MBCOREXLEADS_IMPLEMENTATION_PLAN.md) for architecture, progress and deployment details.

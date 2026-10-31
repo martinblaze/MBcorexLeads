@@ -5,6 +5,8 @@ import { isDuplicate, normalizePhone, parseCsv, personalizeMessage, whatsappUrl 
 test('normalizes Nigerian phone numbers', () => {
   assert.equal(normalizePhone('0803 123 4567'), '2348031234567');
   assert.equal(normalizePhone('+234 803 123 4567'), '2348031234567');
+  assert.equal(normalizePhone('803 123 4567', '234'), '2348031234567');
+  assert.equal(normalizePhone('07123 456789', '44'), '447123456789');
 });
 test('personalizes only approved name placeholders', () => {
   const result = personalizeMessage('Acme');
