@@ -7,13 +7,28 @@ const clean = (value: string, limit = 120) => value.replace(/[\u0000-\u001f\u007
 const sourceQuery = (query: DiscoveryQuery) => clean([query.category, query.keywords, query.city].filter(Boolean).join(" "), 200);
 const failed = (source: string, error: unknown): SourceStatus => ({ source, status: "unavailable", count: 0, message: error instanceof Error ? error.message : "Source request failed" });
 const nextPage = ($: cheerio.CheerioAPI, current: URL) => {
-  const href = $("a").filter((_, anchor) => {
+  const anchors = $("a").toArray().map(anchor => {
     const link = $(anchor);
-    return clean(link.text()).toLowerCase() === "next" || link.attr("aria-label")?.toLowerCase().includes("next") === true;
-  }).first().attr("href");
-  if (!href) return null;
-  const candidate = new URL(href, current);
-  return candidate.origin === current.origin ? candidate : null;
+    const href = link.attr("href");
+    if (!href) return null;
+    const candidate = new URL(href, current);
+    if (candidate.origin !== current.origin || candidate.pathname !== current.pathname) return null;
+    const label = clean(link.text()).toLowerCase();
+    const accessibleLabel = link.attr("aria-label")?.toLowerCase() || "";
+    return { candidate, label, accessibleLabel };
+  }).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  const next = anchors.find(entry => /^(next|next\b|›|»|→)/i.test(entry.label) || entry.accessibleLabel.includes("next"));
+  if (next) return next.candidate;
+
+  for (const key of ["page", "p", "offset", "start"]) {
+    const currentValue = Number(current.searchParams.get(key) || 0);
+    const candidates = anchors
+      .map(entry => ({ ...entry, value: Number(entry.candidate.searchParams.get(key)) }))
+      .filter(entry => Number.isFinite(entry.value) && entry.value > currentValue)
+      .sort((a, b) => a.value - b.value);
+    if (candidates.length) return candidates[0].candidate;
+  }
+  return null;
 };
 
 async function fetchHtml(url: URL) {
@@ -31,8 +46,8 @@ async function collectIndex(query: DiscoveryQuery): Promise<{ status: SourceStat
   const search = sourceQuery(query);
   if (search) url.searchParams.set("q", search);
   if (query.state) url.searchParams.set("state", query.state.toLowerCase());
+  const businesses: DiscoveredBusiness[] = [];
   try {
-    const businesses: DiscoveredBusiness[] = [];
     const seen = new Set<string>();
     let page: URL | null = url;
     for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
@@ -58,6 +73,7 @@ async function collectIndex(query: DiscoveryQuery): Promise<{ status: SourceStat
     }
     return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: "Up to five result pages checked (100 listings maximum)." }, businesses };
   } catch (error) {
+    if (businesses.length) return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: `Returned ${businesses.length} matches; a later page failed: ${error instanceof Error ? error.message : "request failed"}` }, businesses };
     return { status: failed("Index.ng", error), businesses: [] };
   }
 }
@@ -67,8 +83,8 @@ async function collectNaijaBased(query: DiscoveryQuery): Promise<{ status: Sourc
   const search = sourceQuery(query);
   if (search) url.searchParams.set("search", search);
   if (query.state) url.searchParams.set("state", query.state);
+  const businesses: DiscoveredBusiness[] = [];
   try {
-    const businesses: DiscoveredBusiness[] = [];
     const seen = new Set<string>();
     let page: URL | null = url;
     for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
@@ -97,6 +113,7 @@ async function collectNaijaBased(query: DiscoveryQuery): Promise<{ status: Sourc
     }
     return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: "Up to five result pages checked (100 listings maximum)." }, businesses };
   } catch (error) {
+    if (businesses.length) return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: `Returned ${businesses.length} matches; a later page failed: ${error instanceof Error ? error.message : "request failed"}` }, businesses };
     return { status: failed("NaijaBased", error), businesses: [] };
   }
 }
