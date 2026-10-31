@@ -6,6 +6,17 @@ const timeout = (ms = 9000) => AbortSignal.timeout(ms);
 const clean = (value: string, limit = 120) => value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
 const sourceQuery = (query: DiscoveryQuery) => clean([query.category, query.keywords, query.city].filter(Boolean).join(" "), 200);
 const failed = (source: string, error: unknown): SourceStatus => ({ source, status: "unavailable", count: 0, message: error instanceof Error ? error.message : "Source request failed" });
+const safeCursor = (value: string | null | undefined, origin: string, pathname: string) => {
+  if (!value) return null;
+  try {
+    const cursor = new URL(value);
+    return cursor.origin === origin && cursor.pathname === pathname ? cursor : null;
+  } catch { return null; }
+};
+const skipped = (source: string): { status: SourceStatus; businesses: DiscoveredBusiness[] } => ({
+  status: { source, status: "complete", count: 0, message: "No more pages from this directory.", nextCursor: null },
+  businesses: [],
+});
 const nextPage = ($: cheerio.CheerioAPI, current: URL) => {
   const anchors = $("a").toArray().map(anchor => {
     const link = $(anchor);
@@ -17,14 +28,14 @@ const nextPage = ($: cheerio.CheerioAPI, current: URL) => {
     const accessibleLabel = link.attr("aria-label")?.toLowerCase() || "";
     return { candidate, label, accessibleLabel };
   }).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-  const next = anchors.find(entry => /^(next|next\b|›|»|→)/i.test(entry.label) || entry.accessibleLabel.includes("next"));
+  const next = anchors.find(entry => entry.candidate.href !== current.href && (/^next\b|^[›»→]/i.test(entry.label) || entry.accessibleLabel.includes("next")));
   if (next) return next.candidate;
 
   for (const key of ["page", "p", "offset", "start"]) {
     const currentValue = Number(current.searchParams.get(key) || 0);
     const candidates = anchors
       .map(entry => ({ ...entry, value: Number(entry.candidate.searchParams.get(key)) }))
-      .filter(entry => Number.isFinite(entry.value) && entry.value > currentValue)
+      .filter(entry => entry.candidate.href !== current.href && Number.isFinite(entry.value) && entry.value > currentValue)
       .sort((a, b) => a.value - b.value);
     if (candidates.length) return candidates[0].candidate;
   }
@@ -41,15 +52,17 @@ async function fetchHtml(url: URL) {
   return response.text();
 }
 
-async function collectIndex(query: DiscoveryQuery): Promise<{ status: SourceStatus; businesses: DiscoveredBusiness[] }> {
-  const url = new URL("https://index.ng/businesses");
+async function collectIndex(query: DiscoveryQuery, cursor?: string | null): Promise<{ status: SourceStatus; businesses: DiscoveredBusiness[] }> {
+  const url = safeCursor(cursor, "https://index.ng", "/businesses") || new URL("https://index.ng/businesses");
   const search = sourceQuery(query);
-  if (search) url.searchParams.set("q", search);
-  if (query.state) url.searchParams.set("state", query.state.toLowerCase());
+  if (!cursor) {
+    if (search) url.searchParams.set("q", search);
+    if (query.state) url.searchParams.set("state", query.state.toLowerCase());
+  }
   const businesses: DiscoveredBusiness[] = [];
+  let page: URL | null = url;
   try {
     const seen = new Set<string>();
-    let page: URL | null = url;
     for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
       if (pageNumber) await new Promise(resolve => setTimeout(resolve, 500));
       const current: URL = page;
@@ -71,22 +84,24 @@ async function collectIndex(query: DiscoveryQuery): Promise<{ status: SourceStat
       });
       page = businesses.length < 100 ? nextPage($, current) : null;
     }
-    return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: "Up to five result pages checked (100 listings maximum)." }, businesses };
+    return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: "Checked up to five pages in this batch.", nextCursor: page?.toString() || null }, businesses };
   } catch (error) {
-    if (businesses.length) return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: `Returned ${businesses.length} matches; a later page failed: ${error instanceof Error ? error.message : "request failed"}` }, businesses };
+    if (businesses.length) return { status: { source: "Index.ng", status: "complete", count: businesses.length, message: `Returned ${businesses.length} matches; a later page failed: ${error instanceof Error ? error.message : "request failed"}`, nextCursor: page?.toString() || null }, businesses };
     return { status: failed("Index.ng", error), businesses: [] };
   }
 }
 
-async function collectNaijaBased(query: DiscoveryQuery): Promise<{ status: SourceStatus; businesses: DiscoveredBusiness[] }> {
-  const url = new URL("https://api.naijabased.fun/places.php");
+async function collectNaijaBased(query: DiscoveryQuery, cursor?: string | null): Promise<{ status: SourceStatus; businesses: DiscoveredBusiness[] }> {
+  const url = safeCursor(cursor, "https://api.naijabased.fun", "/places.php") || new URL("https://api.naijabased.fun/places.php");
   const search = sourceQuery(query);
-  if (search) url.searchParams.set("search", search);
-  if (query.state) url.searchParams.set("state", query.state);
+  if (!cursor) {
+    if (search) url.searchParams.set("search", search);
+    if (query.state) url.searchParams.set("state", query.state);
+  }
   const businesses: DiscoveredBusiness[] = [];
+  let page: URL | null = url;
   try {
     const seen = new Set<string>();
-    let page: URL | null = url;
     for (let pageNumber = 0; page && pageNumber < 5; pageNumber++) {
       if (pageNumber) await new Promise(resolve => setTimeout(resolve, 500));
       const current: URL = page;
@@ -100,7 +115,8 @@ async function collectNaijaBased(query: DiscoveryQuery): Promise<{ status: Sourc
         const location = clean(card.find(".item-location").first().text());
         const [city = "", state = ""] = location.split(",").map(clean);
         const click = card.attr("onclick") || "";
-        const path = click.match(/(?:window\.location\.href\s*=\s*|location\.href\s*=\s*)['"]([^'"]+)['"]/i)?.[1];
+        const profileLink = card.find("a[href]").toArray().map(anchor => $(anchor).attr("href") || "").find(href => /^\/(?:biz|business)\//i.test(href));
+        const path = click.match(/(?:window\.location\.href\s*=\s*|location\.href\s*=\s*)['"]([^'"]+)['"]/i)?.[1] || profileLink;
         const sourceUrl = path ? new URL(path, "https://www.naijabased.fun").toString() : current.toString();
         const key = `${sourceUrl}|${name.toLowerCase()}|${city.toLowerCase()}`;
         if (seen.has(key)) return;
@@ -111,9 +127,9 @@ async function collectNaijaBased(query: DiscoveryQuery): Promise<{ status: Sourc
       });
       page = businesses.length < 100 ? nextPage($, current) : null;
     }
-    return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: "Up to five result pages checked (100 listings maximum)." }, businesses };
+    return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: "Checked up to five pages in this batch.", nextCursor: page?.toString() || null }, businesses };
   } catch (error) {
-    if (businesses.length) return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: `Returned ${businesses.length} matches; a later page failed: ${error instanceof Error ? error.message : "request failed"}` }, businesses };
+    if (businesses.length) return { status: { source: "NaijaBased", status: "complete", count: businesses.length, message: `Returned ${businesses.length} matches; a later page failed: ${error instanceof Error ? error.message : "request failed"}`, nextCursor: page?.toString() || null }, businesses };
     return { status: failed("NaijaBased", error), businesses: [] };
   }
 }
@@ -154,9 +170,17 @@ async function collectNovovibe(query: DiscoveryQuery): Promise<{ status: SourceS
 }
 
 export async function searchAllSources(query: DiscoveryQuery) {
-  const results = await Promise.all([collectIndex(query), collectNaijaBased(query), collectNovovibe(query)]);
+  const results = await Promise.all([
+    query.continuation && !query.cursors?.indexNg ? Promise.resolve(skipped("Index.ng")) : collectIndex(query, query.continuation ? query.cursors?.indexNg : null),
+    query.continuation && !query.cursors?.naijaBased ? Promise.resolve(skipped("NaijaBased")) : collectNaijaBased(query, query.continuation ? query.cursors?.naijaBased : null),
+    query.continuation ? Promise.resolve(skipped("Novovibe")) : collectNovovibe(query),
+  ]);
   return {
     sources: results.map(result => result.status),
     businesses: results.flatMap(result => result.businesses),
+    cursors: {
+      indexNg: results[0].status.nextCursor || null,
+      naijaBased: results[1].status.nextCursor || null,
+    },
   };
 }

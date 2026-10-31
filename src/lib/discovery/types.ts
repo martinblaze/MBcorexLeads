@@ -1,4 +1,11 @@
-export type DiscoveryQuery = { category: string; keywords: string; state: string; city: string };
+export type DiscoveryQuery = {
+  category: string;
+  keywords: string;
+  state: string;
+  city: string;
+  continuation?: boolean;
+  cursors?: { indexNg?: string | null; naijaBased?: string | null };
+};
 
 export type DiscoveredBusiness = {
   name: string;
@@ -17,4 +24,5 @@ export type SourceStatus = {
   status: "complete" | "unavailable";
   count: number;
   message: string;
+  nextCursor?: string | null;
 };
